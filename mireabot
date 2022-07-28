@@ -1,0 +1,93 @@
+import requests
+from bs4 import BeautifulSoup
+import pandas as pd
+import telebot
+
+# pip3 install pandas --user
+# pip3 install requests --user
+# pip3 install bs4 --user
+# pip3 install pyTelegramBotAPI --user
+
+API_KEY = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+bot = telebot.TeleBot(API_KEY)
+
+
+def find_all_link(x):
+    url1 = 'https://priem.mirea.ru/accepted-entrants-list/getAllCompetitionsRates_p.php?place=moscow&form=och&level=bach'
+    url2 = 'https://vuzopedia.ru/admission-aggregate/753'
+    j = requests.get(url=url1).json().get('competitions')
+    links1 = []
+    for i in j:
+        try:
+            links1 += ['https://priem.mirea.ru/accepted-entrants-list/personal_code_rating.php?competition=' + str(
+                i['totalBudget']['listId'][0])]
+        except IndexError:
+            pass
+
+    links2 = []
+    for i in BeautifulSoup(requests.get(url=url2).text, 'lxml').find_all('div', class_='d-td'):
+        txt = i
+        try:
+            st = txt.find('a')['href']
+            if st.count('242') == 0 and st.count('240') == 0 and st.count('239') == 0:
+                links2 += ['https://vuzopedia.ru/' + st]
+        except TypeError:
+            pass
+
+    lines = requests.get(url=url1).json().get('competitions')
+    lines3 = []
+    for i in lines:
+        s = i['title'].split()[0]
+        if s.count('38.03.04') == 0 and s.count('38.03.02') == 0 and s.count('38.03.01') == 0:
+            lines3 += [s]
+
+    for all_link in list(zip(links1, links2[1:], lines3)):
+        if all_link[-1] == x:
+            return all_link
+
+
+def parser(url1, url2, snils):
+    df = pd.read_html(url1)[0]
+    table1 = [txt.text for txt in BeautifulSoup(requests.get(url=url1).text, 'lxml').find(style="text-align: center")][
+        0]
+    table2 = BeautifulSoup(requests.get(url2).text, 'lxml').find_all(
+        class_='d-tr')
+    df['Позиция'] = list(range(len(df.index)))
+    for i in table2[3:]:
+        s = i.text.split('\n')
+        kyda_ese = s[-2].split('|')
+        for inf in kyda_ese:
+            if inf.count('Подано согласие с оригиналом') and inf.count('РТУ МИРЭА') == 0:
+                df = df.loc[df['СНИЛС/уникальный номер'] != s[2]]
+        df = df.loc[df['Примечание'] != 'Согласие на др. конкурсе']
+        df['Позиция'] = list(range(len(df.index)))
+        find_snils = list(df.loc[df['СНИЛС/уникальный номер'] == str(snils)]['Позиция'])[0] + 1
+        return find_snils, table1
+
+
+@bot.message_handler(commands=['start'])
+def start(message):
+    mess = bot.send_message(message.chat.id,
+                            f'Привет, <b>{message.from_user.first_name}</b>. Введите снилс и интересующее направление (пример: xxx-xxx-xxx-xx xx.xx.xx)',
+                            parse_mode='html')
+    bot.register_next_step_handler(mess, func1)
+
+
+@bot.message_handler(content_types=['text'])
+def func1(message):
+    s = message.text
+    if len(s) == 23:
+        snils_ok = [x.lower() for x in message.text.split()]
+        snils, napr = snils_ok[0], snils_ok[1]
+        print(snils, napr)
+        res_napr = find_all_link(napr)
+        rate = parser(res_napr[0], res_napr[1], snils)
+        bot.send_message(message.chat.id, f'Ваш рейтинг : {rate[0]}\n{rate[1]}', parse_mode='html')
+
+    else:
+        bot.send_message(message.chat.id,
+                         f'Не понимаю... Введите снилс и интересующее направление (пример: xxx-xxx-xxx-xx xx.xx.xx) ',
+                         parse_mode='html')
+
+
+bot.polling(none_stop=True)
